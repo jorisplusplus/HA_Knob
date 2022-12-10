@@ -1,0 +1,4 @@
+(sym_lib_table
+  (lib (name "IP5306")(type "KiCad")(uri "${KIPRJMOD}/IP5306.kicad_sym")(options "")(descr ""))
+  (lib (name "Espressif")(type "KiCad")(uri "${KIPRJMOD}/espressif/libraries/Espressif.kicad_sym")(options "")(descr ""))
+)
