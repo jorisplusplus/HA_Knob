@@ -908,7 +908,7 @@
     (uuid bbf0e25e-ecad-4bfd-80c9-1fb75474b3d9)
     (property "Reference" "J?" (id 0) (at 116.84 73.66 0))
     (property "Value" "LCD" (id 1) (at 116.84 76.2 0))
-    (property "Footprint" "" (id 2) (at 116.84 92.71 0)
+    (property "Footprint" "LCD_GC9A01:GC9A01Round1.28" (id 2) (at 116.84 92.71 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Datasheet" "~" (id 3) (at 116.84 92.71 0)
@@ -1003,7 +1003,7 @@
       (reference "J?") (unit 1) (value "main") (footprint "Connector_Hirose:Hirose_DF52-8S-0.8H_1x08-1MP_P0.80mm_Horizontal")
     )
     (path "/bbf0e25e-ecad-4bfd-80c9-1fb75474b3d9"
-      (reference "J?") (unit 1) (value "LCD") (footprint "")
+      (reference "J?") (unit 1) (value "LCD") (footprint "LCD_GC9A01:GC9A01Round1.28")
     )
     (path "/f6777b3f-7832-45d1-bf4b-ad0fde6a7abd"
       (reference "Q?") (unit 1) (value "AO3400A") (footprint "Package_TO_SOT_SMD:SOT-23")
