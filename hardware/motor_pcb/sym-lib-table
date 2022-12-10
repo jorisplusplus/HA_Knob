@@ -1,0 +1,4 @@
+(sym_lib_table
+  (lib (name "MagnTek")(type "KiCad")(uri "/media/data/git/HA_Knob/hardware/lib/MagnTek.kicad_sym")(options "")(descr ""))
+  (lib (name "Trinamic")(type "KiCad")(uri "/media/data/git/HA_Knob/hardware/lib/Trinamic.kicad_sym")(options "")(descr ""))
+)
