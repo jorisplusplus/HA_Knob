@@ -3,4 +3,5 @@
   (lib (name "Yuandi")(type "KiCad")(uri "${KIPRJMOD}/Yuandi.pretty")(options "")(descr ""))
   (lib (name "Sunlord")(type "KiCad")(uri "${KIPRJMOD}/Sunlord.pretty")(options "")(descr ""))
   (lib (name "Knob")(type "KiCad")(uri "${KIPRJMOD}/Knob.pretty")(options "")(descr ""))
+  (lib (name "Jushuo")(type "KiCad")(uri "${KIPRJMOD}/Jushuo.pretty")(options "")(descr ""))
 )

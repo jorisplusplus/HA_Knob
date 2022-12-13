@@ -1,4 +1,4 @@
-20624081377894670
+20625752344918002
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -56692,6 +56692,13 @@ FPC_12
 0
 14
 13
+Jushuo
+FPC_14
+
+
+0
+16
+15
 LED_SMD
 LED-APA102-2020
 http://www.led-color.com/upload/201604/APA102-2020%20SMD%20LED.pdf
