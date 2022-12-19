@@ -1,4 +1,4 @@
-20675851806655508
+20679193552567805
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -56888,6 +56888,20 @@ solder jumper open
 0
 5
 3
+Jushuo
+FPC_12
+
+
+0
+14
+13
+Jushuo
+FPC_14
+
+
+0
+16
+15
 Knob
 holes
 
