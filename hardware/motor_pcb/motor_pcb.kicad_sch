@@ -1839,7 +1839,7 @@
   (symbol (lib_id "Device:C") (at 181.61 81.28 0) (unit 1)
     (in_bom yes) (on_board yes) (fields_autoplaced)
     (uuid ced9211e-3830-49a7-9c5a-53307e7d1f43)
-    (property "Reference" "C?" (id 0) (at 185.42 80.0099 0)
+    (property "Reference" "C6" (id 0) (at 185.42 80.0099 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "100nF" (id 1) (at 185.42 82.5499 0)
@@ -2025,7 +2025,7 @@
       (reference "C5") (unit 1) (value "100nF") (footprint "Capacitor_SMD:C_0603_1608Metric")
     )
     (path "/ced9211e-3830-49a7-9c5a-53307e7d1f43"
-      (reference "C?") (unit 1) (value "100nF") (footprint "Capacitor_SMD:C_0603_1608Metric")
+      (reference "C6") (unit 1) (value "100nF") (footprint "Capacitor_SMD:C_0603_1608Metric")
     )
     (path "/27b1ed45-aefd-4e31-91ba-488f859fc1d8"
       (reference "H1") (unit 1) (value "MountingHole") (footprint "Holes:Holes")
