@@ -30,7 +30,7 @@ jobs:
       - name: Generate gerbers
         run: |
           pip3 install kikit
-          ./generate.sh
+          bash generate.sh
       
       - name: Archive production artifacts
         uses: actions/upload-artifact@v3
