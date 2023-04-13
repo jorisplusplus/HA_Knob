@@ -1,0 +1,15 @@
+dependencies:
+  espressif/esp_lcd_gc9a01:
+    component_hash: 864fbd9acc669ea860329874dbaeeb62927cad3a18d8b1b8d9d17bb385af2afe
+    source:
+      service_url: https://api.components.espressif.com/
+      type: service
+    version: 1.0.0
+  idf:
+    component_hash: null
+    source:
+      type: idf
+    version: 5.0.1
+manifest_hash: 55f1d50a8b7a2042212227c2f4856cad9b35db8ae45bc719173800f58d3a3a40
+target: esp32s3
+version: 1.0.0
