@@ -52,33 +52,47 @@
 
 #define PI 3.14
 #define FACTOR 75
-#define SPEED 300
+#define SPEED 20000
 
 static const char *TAG = "example";
 
-static void update_motor_speed_callback(void *arg)
-{
+mcpwm_timer_handle_t timer = NULL;
+mcpwm_oper_handle_t operators[3];
+mcpwm_cmpr_handle_t comparators[3];
+mcpwm_fault_handle_t over_cur_fault = NULL;
+mcpwm_gen_handle_t generators[3][2] = {};
+TaskHandle_t s_processor_handle;
 
-    mcpwm_cmpr_handle_t *comparators = (mcpwm_cmpr_handle_t *) arg;
-    
-    static int step = 0;
+IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)
+{    
+    xTaskResumeFromISR(user_ctx);
+    return true;
+}
 
-    int valA = 250 + (int) (sinf((float) step/SPEED*2.0*PI)*FACTOR);
-    int valB = 250 + (int) (sinf((float) step/SPEED*2.0*PI+2.0*PI/3)*FACTOR);
-    int valC = 250 + (int) (sinf((float) step/SPEED*2.0*PI+4.0*PI/3)*FACTOR);
-    //ESP_LOGI(TAG, "%d %d %d", valA, valB, valC);
-    mcpwm_comparator_set_compare_value(comparators[0], valA);
-    mcpwm_comparator_set_compare_value(comparators[1], valB);
-    mcpwm_comparator_set_compare_value(comparators[2], valC);
+//MAIN foc loop
 
-    step = (step+1) % SPEED;
+IRAM_ATTR void vMotorProcessor(void *params) {
+    for (;;) {
+        vTaskSuspend( NULL );
+        static int step = 0;
+
+        int valA = 250 + (int) (sinf((float) step/SPEED*2.0*PI)*FACTOR);
+        int valB = 250 + (int) (sinf((float) step/SPEED*2.0*PI+2.0*PI/3)*FACTOR);
+        int valC = 250 + (int) (sinf((float) step/SPEED*2.0*PI+4.0*PI/3)*FACTOR);
+        //ESP_LOGI(TAG, "%d %d %d", valA, valB, valC);
+        mcpwm_comparator_set_compare_value(comparators[0], valA);
+        mcpwm_comparator_set_compare_value(comparators[1], valB);
+        mcpwm_comparator_set_compare_value(comparators[2], valC);
+
+        step = (step+1) % SPEED;
+    }
 }
 
 void motor_init(void)
 {
 
     ESP_LOGI(TAG, "Create MCPWM timer");
-    mcpwm_timer_handle_t timer = NULL;
+    
     mcpwm_timer_config_t timer_config = {
         .group_id = 0,
         .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
@@ -89,7 +103,7 @@ void motor_init(void)
     ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, &timer));
 
     ESP_LOGI(TAG, "Create MCPWM operator");
-    mcpwm_oper_handle_t operators[3];
+    
     mcpwm_operator_config_t operator_config = {
         .group_id = 0,
     };
@@ -103,9 +117,9 @@ void motor_init(void)
     }
 
     ESP_LOGI(TAG, "Create comparators");
-    mcpwm_cmpr_handle_t comparators[3];
+    //Update values when counter is at max
     mcpwm_comparator_config_t compare_config = {
-        .flags.update_cmp_on_tez = true,
+        .flags.update_cmp_on_tep = true,
     };
     for (int i = 0; i < 3; i++) {
         ESP_ERROR_CHECK(mcpwm_new_comparator(operators[i], &compare_config, &comparators[i]));
@@ -114,7 +128,7 @@ void motor_init(void)
     }
 
     ESP_LOGI(TAG, "Create over current fault detector");
-    mcpwm_fault_handle_t over_cur_fault = NULL;
+   
     mcpwm_gpio_fault_config_t gpio_fault_config = {
         .gpio_num = BLDC_DRV_FAULT_GPIO,
         .group_id = 0,
@@ -134,7 +148,7 @@ void motor_init(void)
     }
 
     ESP_LOGI(TAG, "Create PWM generators");
-    mcpwm_gen_handle_t generators[3][2] = {};
+    
     mcpwm_generator_config_t gen_config = {};
     const int gen_gpios[3][2] = {
         {BLDC_PWM_UH_GPIO, BLDC_PWM_UL_GPIO},
@@ -168,20 +182,15 @@ void motor_init(void)
         ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(generators[i][BLDC_MCPWM_GEN_INDEX_HIGH], generators[i][BLDC_MCPWM_GEN_INDEX_LOW], &dt_config));
     }
 
-    ESP_LOGI(TAG, "Start a timer to adjust motor speed periodically");
-    esp_timer_handle_t periodic_timer = NULL;
-    const esp_timer_create_args_t periodic_timer_args = {
-        .callback = update_motor_speed_callback,
-        .arg = comparators,
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, BLDC_SPEED_UPDATE_PERIOD_US));
+    //Generate interrupts events on timer zero
+    mcpwm_timer_event_callbacks_t callbacks;
+    callbacks.on_full = NULL;
+    callbacks.on_empty = md_update;
+    callbacks.on_stop = NULL;
+    xTaskCreate(vMotorProcessor, "FOC", 8192, NULL, 1, &s_processor_handle);
+    mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
 
     ESP_LOGI(TAG, "Start the MCPWM timer");
     ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
     ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
-
-    while(1) {
-        vTaskDelay(100);
-    }
 }
