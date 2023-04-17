@@ -8,7 +8,7 @@
 #include "driver/mcpwm_gen.h"
 #include "driver/gpio.h"
 #include "math.h"
-
+#include "driver/i2c.h"
 
 #define GPIO_LCD_RESET  GPIO_NUM_1
 #define GPIO_LCD_SDA    GPIO_NUM_2
@@ -47,12 +47,25 @@
 #define BLDC_PWM_WL_GPIO          GPIO_MOTOR_WL
 
 
+#define I2C_MASTER_SCL_IO           GPIO_MM_SCL      /*!< GPIO number used for I2C master clock */
+#define I2C_MASTER_SDA_IO           GPIO_MM_SDA      /*!< GPIO number used for I2C master data  */
+#define I2C_MASTER_NUM              0                          /*!< I2C master i2c port number, the number of i2c peripheral interfaces available will depend on the chip */
+#define I2C_MASTER_FREQ_HZ          1000000                     /*!< I2C master clock frequency */
+#define I2C_MASTER_TX_BUF_DISABLE   0                          /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_RX_BUF_DISABLE   0                          /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_TIMEOUT_MS       1000
+#define LCD_HOST    SPI2_HOST
+#define MM_ADDRESS 0b0000110
+
+
 #define BLDC_MCPWM_GEN_INDEX_HIGH 0
 #define BLDC_MCPWM_GEN_INDEX_LOW  1
 
 #define PI 3.14
 #define FACTOR 75
-#define SPEED 20000
+#define SPEED 2857
+#define _SQRT3_2 0.86602540378f
+#define VSUPPLY 5.0
 
 static const char *TAG = "example";
 
@@ -63,6 +76,8 @@ mcpwm_fault_handle_t over_cur_fault = NULL;
 mcpwm_gen_handle_t generators[3][2] = {};
 TaskHandle_t s_processor_handle;
 
+float offset = 0.0f;
+
 IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)
 {    
     xTaskResumeFromISR(user_ctx);
@@ -71,26 +86,84 @@ IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_ev
 
 //MAIN foc loop
 
-IRAM_ATTR void vMotorProcessor(void *params) {
-    for (;;) {
-        vTaskSuspend( NULL );
-        static int step = 0;
+/**
+ * @brief i2c master initialization
+ */
+static esp_err_t i2c_master_init(void)
+{
+    int i2c_master_port = I2C_MASTER_NUM;
 
-        int valA = 250 + (int) (sinf((float) step/SPEED*2.0*PI)*FACTOR);
-        int valB = 250 + (int) (sinf((float) step/SPEED*2.0*PI+2.0*PI/3)*FACTOR);
-        int valC = 250 + (int) (sinf((float) step/SPEED*2.0*PI+4.0*PI/3)*FACTOR);
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+
+    i2c_param_config(i2c_master_port, &conf);
+
+    return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
+}
+
+IRAM_ATTR static float read_angle(float *raw)
+{
+        uint8_t txdata;
+        uint8_t data[2];
+        txdata = 0x03;
+        esp_err_t res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, data, 1, 10);
+        txdata = 0x04;
+        res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, &data[1], 1, 10);
+        uint16_t val = (data[0] << 6) | data[1] >> 2;
+        float angle = ((float) val)/16384*2*PI;
+        if (raw != NULL) *raw = angle;
+        angle = (-7*angle) - offset;
+        angle = fmod(angle, 2*PI);
+        if (angle < 0) angle += (2*PI);
+        return angle;
+        //ESP_LOGI(TAG, "%d %d  ANGLE: %f", res, val, angle);
+}
+
+IRAM_ATTR static void setVoltages(float Ua, float Ub, float Uc) {
+        int valA = Ua/VSUPPLY*BLDC_MCPWM_PERIOD;
+        valA = valA < 0 ? 0 : valA > BLDC_MCPWM_PERIOD ? BLDC_MCPWM_PERIOD : valA;
+        int valB = Ub/VSUPPLY*BLDC_MCPWM_PERIOD;
+        valB = valB < 0 ? 0 : valB > BLDC_MCPWM_PERIOD ? BLDC_MCPWM_PERIOD : valB;
+        int valC = Uc/VSUPPLY*BLDC_MCPWM_PERIOD;
+        valC = valC < 0 ? 0 : valC > BLDC_MCPWM_PERIOD ? BLDC_MCPWM_PERIOD : valC;
         //ESP_LOGI(TAG, "%d %d %d", valA, valB, valC);
         mcpwm_comparator_set_compare_value(comparators[0], valA);
         mcpwm_comparator_set_compare_value(comparators[1], valB);
         mcpwm_comparator_set_compare_value(comparators[2], valC);
+}
 
-        step = (step+1) % SPEED;
+
+IRAM_ATTR void vMotorProcessor(void *params) {
+    float Uq = 1.5f;
+    float voltage_power_supply = 5.0;
+    for (;;) {
+        vTaskSuspend( NULL );
+        float raw;
+        float angle_el = read_angle(&raw);
+        
+        // Inverse park transform
+        float Ualpha =  -sin(angle_el) * Uq;  // -sin(angle) * Uq;
+        float Ubeta =  cos(angle_el) * Uq;    //  cos(angle) * Uq;
+
+        // Inverse Clarke transform
+        float Ua = Ualpha + voltage_power_supply/2;
+        float Ub = -0.5 * Ualpha  + _SQRT3_2 * Ubeta + voltage_power_supply/2;
+        float Uc = -0.5 * Ualpha - _SQRT3_2 * Ubeta + voltage_power_supply/2;
+        //ESP_LOGI(TAG, "%f %f %f %f", Ua, Ub, Uc, angle_el);
+
+        setVoltages(Ua, Ub, Uc);
     }
 }
 
 void motor_init(void)
 {
-
+    i2c_master_init();
     ESP_LOGI(TAG, "Create MCPWM timer");
     
     mcpwm_timer_config_t timer_config = {
@@ -182,6 +255,17 @@ void motor_init(void)
         ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(generators[i][BLDC_MCPWM_GEN_INDEX_HIGH], generators[i][BLDC_MCPWM_GEN_INDEX_LOW], &dt_config));
     }
 
+    ESP_LOGI(TAG, "Start the MCPWM timer");
+    ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
+    setVoltages(0.4, 0, 0);
+    vTaskDelay(100);
+    offset = read_angle(NULL);
+    ESP_LOGI(TAG, "OFFSET: %f", offset);
+    setVoltages(0, 0, 0);
+    vTaskDelay(100);
+    mcpwm_timer_disable(timer);
+
     //Generate interrupts events on timer zero
     mcpwm_timer_event_callbacks_t callbacks;
     callbacks.on_full = NULL;
@@ -189,8 +273,9 @@ void motor_init(void)
     callbacks.on_stop = NULL;
     xTaskCreate(vMotorProcessor, "FOC", 8192, NULL, 1, &s_processor_handle);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
-
     ESP_LOGI(TAG, "Start the MCPWM timer");
     ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
     ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
+
+    
 }

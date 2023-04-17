@@ -23,39 +23,6 @@
 #define LCD_HOST    SPI2_HOST
 #define MM_ADDRESS 0b0000110
 
-/**
- * @brief i2c master initialization
- */
-static esp_err_t i2c_master_init(void)
-{
-    int i2c_master_port = I2C_MASTER_NUM;
-
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = I2C_MASTER_SDA_IO,
-        .scl_io_num = I2C_MASTER_SCL_IO,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_MASTER_FREQ_HZ,
-    };
-
-    i2c_param_config(i2c_master_port, &conf);
-
-    return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
-}
-
-static void read_angle(void)
-{
-        uint8_t txdata;
-        uint8_t data[2];
-        txdata = 0x03;
-        esp_err_t res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, data, 1, 10);
-        txdata = 0x04;
-        res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, &data[1], 1, 10);
-        uint16_t val = (data[0] << 6) | data[1] >> 2;
-        float angle = ((float) val)/16384*360;
-        ESP_LOGI(TAG, "%d %d  ANGLE: %f", res, val, angle);
-}
 
 //This function is called (in irq context!) just before a transmission starts. It will
 //set the D/C line to the value indicated in the user field.
@@ -68,8 +35,6 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 
 void app_main(void)
 {
-    ESP_LOGI("Test", "Test");
-    ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
     ESP_LOGI(TAG, "Turn off LCD backlight");
     gpio_config_t bk_gpio_config = {
@@ -120,7 +85,6 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
     gpio_set_level(GPIO_LCD_BL, 1);
     while (1) {
-        read_angle();
         vTaskDelay(10);
     }
 }
