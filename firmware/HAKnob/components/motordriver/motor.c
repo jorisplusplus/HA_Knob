@@ -61,8 +61,8 @@
 #define BLDC_MCPWM_GEN_INDEX_HIGH 0
 #define BLDC_MCPWM_GEN_INDEX_LOW  1
 
-#define PI 3.14
-#define PI2 6.28
+#define PI M_PI
+#define PI2 6.28318530718
 #define FACTOR 75
 #define SPEED 2857
 #define _SQRT3_2 0.86602540378f
@@ -77,7 +77,7 @@ mcpwm_fault_handle_t over_cur_fault = NULL;
 mcpwm_gen_handle_t generators[3][2] = {};
 TaskHandle_t s_processor_handle;
 
-float offset = 0.0f;
+float offset = 1.959660f;
 
 IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)
 {    
@@ -148,12 +148,59 @@ IRAM_ATTR static void set_voltages(float Ua, float Ub, float Uc) {
         mcpwm_comparator_set_compare_value(comparators[2], valC);
 }
 
+#define POS_P (1.0f)
+
+#define VEL_P (0.1f)
+#define VEL_I (0.0001f)
+#define VEL_D (0.0001f)
+#define VMAX (PI2)
+
+// PID controller function with integral limit
+IRAM_ATTR static float pid_controller(float setpoint, float process_variable, float dt)
+{
+    // PID controller variables
+    static float error = 0.0f;
+    static float integral = 0.0f;
+    static float derivative = 0.0f;
+    static float prev_error = 0.0f;
+    static float integral_limit = 10.0f;
+
+    // Calculate the error term
+    error = setpoint - process_variable;
+    
+    // Calculate the integral term
+    integral += error * dt;
+    
+    // Apply integral limit
+    if (integral > integral_limit)
+    {
+        integral = integral_limit;
+    }
+    else if (integral < -integral_limit)
+    {
+        integral = -integral_limit;
+    }
+    
+    // Calculate the derivative term
+    derivative = (error - prev_error) / dt;
+    prev_error = error;
+    
+    // Calculate the control output
+    float output = VEL_P * error + VEL_I * integral + VEL_D * derivative;
+    
+    return output;
+}
+
 
 IRAM_ATTR void vMotorProcessor(void *params) {
     float Uq = 1.5f;
     float voltage_power_supply = 5.0;
     int64_t last_update = esp_timer_get_time();
+    int64_t last_update_PID = esp_timer_get_time();
     float last_angle = read_angle();
+    float vfilt = 0;
+    float desired_angle = PI;
+    int decimator = 0;
     for (;;) {
         vTaskSuspend( NULL );
         float angle = read_angle();
@@ -164,11 +211,27 @@ IRAM_ATTR void vMotorProcessor(void *params) {
         if (dangle > PI) dangle -= PI2;
         if (dangle < -PI) dangle += PI2;
         float v = dangle/dt*1000000;
+        vfilt += 0.25*(v-vfilt);    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
 
 
+        decimator++;
+        if (decimator == 200) {
+            //Step 1: Compute target Velocity
+            float error_angle = desired_angle - angle;
+            float vtarget = -error_angle*POS_P;
+            vtarget = fmin(vtarget, VMAX);
 
-
-        // Caculate voltages using park/clarke transforms
+            //Step 2: Compute Voltage
+            float timestep = ((float) current_time-last_update_PID)/1000000;
+            Uq = pid_controller(vtarget, vfilt, timestep);
+            if (Uq < -2.0) Uq = -2.0;
+            if (Uq > 2.0) Uq = 2.0;
+            ESP_LOGI(TAG, "%f %f, %f, %f", Uq, angle, vtarget, vfilt);
+            last_update_PID = current_time;
+            decimator = 0;
+        }
+        //Uq = 1.0f;
+        //Step 3: Calculate phase voltages using park/clarke transforms
         float angle_el = electrical_angle(angle);
         
         // Inverse park transform
@@ -181,6 +244,7 @@ IRAM_ATTR void vMotorProcessor(void *params) {
         float Uc = -0.5 * Ualpha - _SQRT3_2 * Ubeta + voltage_power_supply/2;
 
         set_voltages(Ua, Ub, Uc);
+        
         last_update = current_time;
         last_angle = angle;
     }
@@ -283,10 +347,17 @@ void motor_init(void)
     ESP_LOGI(TAG, "Start the MCPWM timer");
     ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
     ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
-    set_voltages(0.4, 0, 0);
+    ESP_LOGI(TAG, "A");
+    set_voltages(1.0, 0, 0);
     vTaskDelay(100);
-    offset = read_angle(NULL);
+    //offset = read_angle(NULL);
     ESP_LOGI(TAG, "OFFSET: %f", offset);
+    ESP_LOGI(TAG, "B");
+    set_voltages(0, 1.0, 0);
+    vTaskDelay(100);
+    ESP_LOGI(TAG, "C");
+    set_voltages(0, 0, 1.0);
+    vTaskDelay(100);
     set_voltages(0, 0, 0);
     vTaskDelay(100);
     mcpwm_timer_disable(timer);
