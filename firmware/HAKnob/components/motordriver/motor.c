@@ -159,13 +159,13 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
         mcpwm_comparator_set_compare_value(comparators[2], valC);
 }
 
-#define POS_P (5.0f)
+#define POS_P (10.0f)
 
-#define VEL_P (0.08f)
+#define VEL_P (0.3f)
 #define VEL_I (0.001f)
 #define VEL_D (0.0001f)
 #define VMAX (2*PI2)
-#define ULIMIT (1.4f)
+#define ULIMIT (2.0f)
 
 // PID controller function with integral limit
 static float IRAM_ATTR pid_controller(float setpoint, float process_variable, float dt)
@@ -254,7 +254,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             if (dangle > PI) dangle -= PI2;
             if (dangle < -PI) dangle += PI2;
             float v = dangle/((float)dt/1000000);
-            vfilt = vfilt*0.95f + 0.05f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
+            vfilt = vfilt*0.98f + 0.02f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
 
 
        
@@ -282,7 +282,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
-            ESP_LOGI(TAG, "A:%f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
+            ESP_LOGI(TAG, "A:%f %f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
 
         }
         
