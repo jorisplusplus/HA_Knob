@@ -34,7 +34,7 @@
 #define GPIO_LCD_SCL    GPIO_NUM_42  
 
 #define BLDC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
-#define BLDC_MCPWM_PERIOD              500      // 50us, 20KHz
+#define BLDC_MCPWM_PERIOD              2000      // 50us, 20KHz
 #define BLDC_SPIN_DIRECTION_CCW        false    // define the spin direction
 #define BLDC_SPEED_UPDATE_PERIOD_US    333   
 
@@ -62,7 +62,8 @@
 #define BLDC_MCPWM_GEN_INDEX_LOW  1
 
 #define PI M_PI
-#define PI2 6.28318530718
+#define PI2    6.28318530718
+#define _3PI_2 4.71238898038
 #define FACTOR 75
 #define SPEED 2857
 #define _SQRT3_2 0.86602540378f
@@ -77,11 +78,20 @@ mcpwm_fault_handle_t over_cur_fault = NULL;
 mcpwm_gen_handle_t generators[3][2] = {};
 TaskHandle_t s_processor_handle;
 
-float offset = 1.959660f;
+float offset = 0.0f;
+
+volatile int process_en = 0;
 
 IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)
 {    
-    xTaskResumeFromISR(user_ctx);
+    //xTaskResumeFromISR(user_ctx);
+    //vMotorProcessor(NULL);
+    static int decimator = 0;
+    decimator++;
+    if (decimator == 10) {
+    process_en = 1;
+    decimator = 0;
+    }
     return true;
 }
 
@@ -108,7 +118,7 @@ static esp_err_t i2c_master_init(void)
     return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
-IRAM_ATTR static float read_angle()
+static float IRAM_ATTR read_angle()
 {
         uint8_t txdata;
         uint8_t data[2];
@@ -118,9 +128,10 @@ IRAM_ATTR static float read_angle()
         res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, &data[1], 1, 10);
         uint16_t val = (data[0] << 6) | data[1] >> 2;
         float angle = ((float) val)/16384*PI2;
-        return angle;
         //ESP_LOGI(TAG, "%d %d  ANGLE: %f", res, val, angle);
+        return angle;       
 }
+
 
 /**
  * @brief Determines the electrical angle of the motor assumes CCW and 7 pole pairs
@@ -128,14 +139,14 @@ IRAM_ATTR static float read_angle()
  * @param raw Input raw angle in between 0 and 2PI
  * @return IRAM_ATTR 
  */
-IRAM_ATTR static float electrical_angle(float raw) {
+static float IRAM_ATTR electrical_angle(float raw) {
         float angle = (-7*raw) - offset;
         angle = fmod(angle, PI2);
         if (angle < 0) angle += (PI2);
         return angle;
 }
 
-IRAM_ATTR static void set_voltages(float Ua, float Ub, float Uc) {
+static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
         int valA = Ua/VSUPPLY*BLDC_MCPWM_PERIOD;
         valA = valA < 0 ? 0 : valA > BLDC_MCPWM_PERIOD ? BLDC_MCPWM_PERIOD : valA;
         int valB = Ub/VSUPPLY*BLDC_MCPWM_PERIOD;
@@ -148,15 +159,16 @@ IRAM_ATTR static void set_voltages(float Ua, float Ub, float Uc) {
         mcpwm_comparator_set_compare_value(comparators[2], valC);
 }
 
-#define POS_P (1.0f)
+#define POS_P (5.0f)
 
-#define VEL_P (0.1f)
-#define VEL_I (0.0001f)
+#define VEL_P (0.08f)
+#define VEL_I (0.001f)
 #define VEL_D (0.0001f)
-#define VMAX (PI2)
+#define VMAX (2*PI2)
+#define ULIMIT (1.4f)
 
 // PID controller function with integral limit
-IRAM_ATTR static float pid_controller(float setpoint, float process_variable, float dt)
+static float IRAM_ATTR pid_controller(float setpoint, float process_variable, float dt)
 {
     // PID controller variables
     static float error = 0.0f;
@@ -191,8 +203,35 @@ IRAM_ATTR static float pid_controller(float setpoint, float process_variable, fl
     return output;
 }
 
+float IRAM_ATTR _normalizeAngle(float angle){
+  float a = fmod(angle, PI2);
+  return a >= 0 ? a : (a + PI2);
+}
 
-IRAM_ATTR void vMotorProcessor(void *params) {
+void IRAM_ATTR setPhaseVoltage(float Uq, float Ud, float angle_el) {
+      // Sinusoidal PWM modulation
+      // Inverse Park + Clarke transformation
+
+      // angle normalization in between 0 and 2pi
+      // only necessary if using _sin and _cos - approximation functions
+      angle_el = _normalizeAngle(angle_el);
+      float _ca = cos(angle_el);
+      float _sa = sin(angle_el);
+      // Inverse park transform
+      float Ualpha =  _ca * Ud - _sa * Uq;  // -sin(angle) * Uq;
+      float Ubeta =  _sa * Ud + _ca * Uq;    //  cos(angle) * Uq;
+
+      // center = modulation_centered ? (driver->voltage_limit)/2 : Uq;
+      float center = 5.0/2;
+      // Clarke transform
+      float Ua = Ualpha + center;
+      float Ub = -0.5f * Ualpha  + _SQRT3_2 * Ubeta + center;
+      float Uc = -0.5f * Ualpha - _SQRT3_2 * Ubeta + center;
+
+      set_voltages(Ua, Ub, Uc);
+}
+
+void IRAM_ATTR vMotorProcessor(void *params) {
     float Uq = 1.5f;
     float voltage_power_supply = 5.0;
     int64_t last_update = esp_timer_get_time();
@@ -202,49 +241,54 @@ IRAM_ATTR void vMotorProcessor(void *params) {
     float desired_angle = PI;
     int decimator = 0;
     for (;;) {
-        vTaskSuspend( NULL );
-        float angle = read_angle();
+        while(process_en == 0) {}
+        process_en = 0;
         int64_t current_time = esp_timer_get_time();
-        int64_t dt = current_time - last_update;
+        float angle = read_angle();
+        int64_t readtime = esp_timer_get_time() - current_time;
         
-        float dangle = angle - last_angle;
-        if (dangle > PI) dangle -= PI2;
-        if (dangle < -PI) dangle += PI2;
-        float v = dangle/dt*1000000;
-        vfilt += 0.25*(v-vfilt);    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
+        int64_t dt = current_time - last_update;
+         decimator++;
+        if (decimator == 5) {
+            float dangle = angle - last_angle;
+            if (dangle > PI) dangle -= PI2;
+            if (dangle < -PI) dangle += PI2;
+            float v = dangle/((float)dt/1000000);
+            vfilt = vfilt*0.95f + 0.05f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
 
 
-        decimator++;
-        if (decimator == 200) {
+       
             //Step 1: Compute target Velocity
+            if (angle < PI/2) {
+                desired_angle = PI/4;
+            } else if (angle < PI) {
+                desired_angle = PI*3/4;
+            } else if (angle < 1.5*PI) {
+                desired_angle = PI*5/4;
+            } else {
+                desired_angle = PI*7/4;
+            }
+
+
             float error_angle = desired_angle - angle;
             float vtarget = -error_angle*POS_P;
             vtarget = fmin(vtarget, VMAX);
+            //vtarget = 10.0f;
 
             //Step 2: Compute Voltage
             float timestep = ((float) current_time-last_update_PID)/1000000;
             Uq = pid_controller(vtarget, vfilt, timestep);
-            if (Uq < -2.0) Uq = -2.0;
-            if (Uq > 2.0) Uq = 2.0;
-            ESP_LOGI(TAG, "%f %f, %f, %f", Uq, angle, vtarget, vfilt);
+            if (Uq < -ULIMIT) Uq = -ULIMIT;
+            if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
+            ESP_LOGI(TAG, "A:%f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
+
         }
-        //Uq = 1.0f;
-        //Step 3: Calculate phase voltages using park/clarke transforms
-        float angle_el = electrical_angle(angle);
         
-        // Inverse park transform
-        float Ualpha =  -sin(angle_el) * Uq;  // -sin(angle) * Uq;
-        float Ubeta =  cos(angle_el) * Uq;    //  cos(angle) * Uq;
 
-        // Inverse Clarke transform
-        float Ua = Ualpha + voltage_power_supply/2;
-        float Ub = -0.5 * Ualpha  + _SQRT3_2 * Ubeta + voltage_power_supply/2;
-        float Uc = -0.5 * Ualpha - _SQRT3_2 * Ubeta + voltage_power_supply/2;
-
-        set_voltages(Ua, Ub, Uc);
-        
+        setPhaseVoltage(Uq, 0.0, electrical_angle(angle));
+        //set_voltages(0, 0, 0);
         last_update = current_time;
         last_angle = angle;
     }
@@ -348,16 +392,11 @@ void motor_init(void)
     ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
     ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
     ESP_LOGI(TAG, "A");
-    set_voltages(1.0, 0, 0);
+    setPhaseVoltage(2.0, 0, _3PI_2);
     vTaskDelay(100);
-    //offset = read_angle(NULL);
+    offset = 0;
+    offset = electrical_angle(read_angle(NULL));
     ESP_LOGI(TAG, "OFFSET: %f", offset);
-    ESP_LOGI(TAG, "B");
-    set_voltages(0, 1.0, 0);
-    vTaskDelay(100);
-    ESP_LOGI(TAG, "C");
-    set_voltages(0, 0, 1.0);
-    vTaskDelay(100);
     set_voltages(0, 0, 0);
     vTaskDelay(100);
     mcpwm_timer_disable(timer);
@@ -367,11 +406,9 @@ void motor_init(void)
     callbacks.on_full = NULL;
     callbacks.on_empty = md_update;
     callbacks.on_stop = NULL;
-    xTaskCreate(vMotorProcessor, "FOC", 8192, NULL, 1, &s_processor_handle);
+    xTaskCreatePinnedToCore(vMotorProcessor, "FOC", 16000, NULL, 100, &s_processor_handle, 1);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
     ESP_LOGI(TAG, "Start the MCPWM timer");
     ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
     ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
-
-    
 }
