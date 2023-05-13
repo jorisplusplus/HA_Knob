@@ -34,7 +34,7 @@
 #define GPIO_LCD_SCL    GPIO_NUM_42  
 
 #define BLDC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
-#define BLDC_MCPWM_PERIOD              2000      // 50us, 20KHz
+#define BLDC_MCPWM_PERIOD              500      // 50us, 20KHz
 #define BLDC_SPIN_DIRECTION_CCW        false    // define the spin direction
 #define BLDC_SPEED_UPDATE_PERIOD_US    333   
 
@@ -88,7 +88,7 @@ IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_ev
     //vMotorProcessor(NULL);
     static int decimator = 0;
     decimator++;
-    if (decimator == 10) {
+    if (decimator == 40) {
     process_en = 1;
     decimator = 0;
     }
@@ -161,9 +161,9 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
 
 #define POS_P (10.0f)
 
-#define VEL_P (0.3f)
-#define VEL_I (0.001f)
-#define VEL_D (0.0001f)
+#define VEL_P (0.25f)
+#define VEL_I (0.005f)
+#define VEL_D (0.0025f)
 #define VMAX (2*PI2)
 #define ULIMIT (2.0f)
 
