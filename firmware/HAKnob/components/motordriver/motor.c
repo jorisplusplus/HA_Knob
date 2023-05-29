@@ -9,6 +9,7 @@
 #include "driver/gpio.h"
 #include "math.h"
 #include "driver/i2c.h"
+#include "motorindent.h"
 
 #define GPIO_LCD_RESET  GPIO_NUM_1
 #define GPIO_LCD_SDA    GPIO_NUM_2
@@ -238,8 +239,9 @@ void IRAM_ATTR vMotorProcessor(void *params) {
     int64_t last_update_PID = esp_timer_get_time();
     float last_angle = read_angle();
     float vfilt = 0;
-    float desired_angle = PI;
     int decimator = 0;
+    int motor_enable = 0;
+
     for (;;) {
         while(process_en == 0) {}
         process_en = 0;
@@ -248,7 +250,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
         int64_t readtime = esp_timer_get_time() - current_time;
         
         int64_t dt = current_time - last_update;
-         decimator++;
+        decimator++;
         if (decimator == 5) {
             float dangle = angle - last_angle;
             if (dangle > PI) dangle -= PI2;
@@ -259,21 +261,19 @@ void IRAM_ATTR vMotorProcessor(void *params) {
 
        
             //Step 1: Compute target Velocity
-            if (angle < PI/2) {
-                desired_angle = PI/4;
-            } else if (angle < PI) {
-                desired_angle = PI*3/4;
-            } else if (angle < 1.5*PI) {
-                desired_angle = PI*5/4;
+            motor_indent_t *indent = motor_indent_find(angle * 360 / PI2);
+
+            float vtarget;
+
+            if (indent != NULL) {
+                float error_angle = indent->angle - angle;
+                vtarget = -error_angle*POS_P;
+                vtarget = fmin(vtarget, VMAX);
+                motor_enable = 1;
             } else {
-                desired_angle = PI*7/4;
+                motor_enable = 0;
+                vtarget = 0;
             }
-
-
-            float error_angle = desired_angle - angle;
-            float vtarget = -error_angle*POS_P;
-            vtarget = fmin(vtarget, VMAX);
-            //vtarget = 10.0f;
 
             //Step 2: Compute Voltage
             float timestep = ((float) current_time-last_update_PID)/1000000;
@@ -285,9 +285,8 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             ESP_LOGI(TAG, "A:%f %f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
 
         }
-        
 
-        setPhaseVoltage(Uq, 0.0, electrical_angle(angle));
+        setPhaseVoltage(motor_enable ? Uq : 0.0f, 0.0, electrical_angle(angle));
         //set_voltages(0, 0, 0);
         last_update = current_time;
         last_angle = angle;
@@ -406,6 +405,7 @@ void motor_init(void)
     callbacks.on_full = NULL;
     callbacks.on_empty = md_update;
     callbacks.on_stop = NULL;
+    motor_indent_register(180, 30, 30, 1);
     xTaskCreatePinnedToCore(vMotorProcessor, "FOC", 16000, NULL, 100, &s_processor_handle, 1);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
     ESP_LOGI(TAG, "Start the MCPWM timer");
