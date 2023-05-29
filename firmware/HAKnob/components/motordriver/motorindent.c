@@ -1,6 +1,7 @@
 #include "motor.h"
 #include "motorindent.h"
 #include "stdlib.h"
+#include "esp_log.h"
 
 #define MAX(a, b) (a > b ? a : b)
 #define MIN(a, b) (a < b ? a : b)
@@ -59,6 +60,8 @@ void motor_indent_destroy() {
  * @return motor_indent_t* First indent in range, NULL when no indent in range
  */
 motor_indent_t *motor_indent_find(float angle) {
+    static motor_indent_t *prev_indent = NULL;
+    
     motor_indent_t *search = HEAD;
     while (search != NULL) {
         float cw_wrap = -1.0f;
@@ -77,6 +80,10 @@ motor_indent_t *motor_indent_find(float angle) {
         }
 
         if (angle > ccw_stop && angle < cw_stop) {
+            if (search != prev_indent) {
+                prev_indent = search;
+                ESP_LOGI("motor_indent", "Found indent at %f", search->angle);
+            }
             return search;
         }
         //Handle wraparound
@@ -86,6 +93,11 @@ motor_indent_t *motor_indent_find(float angle) {
         if (ccw_wrap > 0.0f && angle > ccw_wrap) {
             return search;
         }
+        search = search->next;
     }
+    if (prev_indent != NULL) {
+        ESP_LOGI("motor_indent", "No indent at %f", angle);
+    }
+    prev_indent = NULL;
     return NULL;
 }

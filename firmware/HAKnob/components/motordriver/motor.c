@@ -90,8 +90,8 @@ IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_ev
     static int decimator = 0;
     decimator++;
     if (decimator == 40) {
-    process_en = 1;
-    decimator = 0;
+        process_en = 1;
+        decimator = 0;
     }
     return true;
 }
@@ -241,7 +241,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
     float vfilt = 0;
     int decimator = 0;
     int motor_enable = 0;
-
+    ESP_LOGI(TAG, "Motor controller started");
     for (;;) {
         while(process_en == 0) {}
         process_en = 0;
@@ -266,7 +266,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             float vtarget;
 
             if (indent != NULL) {
-                float error_angle = indent->angle - angle;
+                float error_angle = indent->angle*PI2/360 - angle;
                 vtarget = -error_angle*POS_P;
                 vtarget = fmin(vtarget, VMAX);
                 motor_enable = 1;
@@ -282,7 +282,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
-            ESP_LOGI(TAG, "A:%f %f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
+            //ESP_LOGI(TAG, "A:%f %f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
 
         }
 
@@ -405,7 +405,9 @@ void motor_init(void)
     callbacks.on_full = NULL;
     callbacks.on_empty = md_update;
     callbacks.on_stop = NULL;
-    motor_indent_register(180, 30, 30, 1);
+    for (int i = 10; i < 360; i+= 20) {
+        motor_indent_register(i, 10, 10, 1);
+    }
     xTaskCreatePinnedToCore(vMotorProcessor, "FOC", 16000, NULL, 100, &s_processor_handle, 1);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
     ESP_LOGI(TAG, "Start the MCPWM timer");
