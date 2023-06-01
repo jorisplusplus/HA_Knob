@@ -89,7 +89,7 @@ IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_ev
     //vMotorProcessor(NULL);
     static int decimator = 0;
     decimator++;
-    if (decimator == 40) {
+    if (decimator == 4) {
         process_en = 1;
         decimator = 0;
     }
@@ -159,17 +159,28 @@ static float IRAM_ATTR read_angle()
 #define AVG_NUM (8)
 static float IRAM_ATTR read_angle_avg() {
     static float angles[AVG_NUM];
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+
     for (int i = 0; i < (AVG_NUM - 1); i++)
     {
         angles[i] = angles[i + 1];
     }
     angles[AVG_NUM - 1] = read_angle();
 
-    float total = 0.0f;
     for (int i = 0; i < AVG_NUM; i++) {
-        total += angles[i];
+        sumX += cos(angles[i]);
+        sumY += sin(angles[i]);
     }
-    return total / AVG_NUM;
+    float avgX = sumX/AVG_NUM;
+    float avgY = sumY/AVG_NUM;
+
+    float average = atan2(avgY, avgX);
+    if (average < 0.0) {
+        average += PI2;
+    }
+
+    return average;
 }
 
 /**
@@ -200,9 +211,9 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
 
 #define POS_P (10.0f)
 
-#define VEL_P (0.07f)
-#define VEL_I (0.0005f)
-#define VEL_D (0.00025f)
+#define VEL_P (0.03f)
+#define VEL_I (0.00005f)
+#define VEL_D (0.000025f)
 #define VMAX (2*PI2)
 #define ULIMIT (2.0f)
 
@@ -291,9 +302,9 @@ void IRAM_ATTR vMotorProcessor(void *params) {
         if (dangle > PI) dangle -= PI2;
         if (dangle < -PI) dangle += PI2;
         float v = dangle/((float)dt/1000000);
-        vfilt = vfilt*0.9f + 0.1f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
+        vfilt = vfilt*0.95f + 0.05f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
         decimator++;
-        if (decimator == 5) {       
+        if (decimator == 50) {       
             //Step 1: Compute target Velocity
             motor_indent_t *indent = motor_indent_find(angle * 360 / PI2);
 
