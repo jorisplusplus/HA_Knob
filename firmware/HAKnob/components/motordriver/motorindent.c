@@ -82,7 +82,7 @@ motor_indent_t *motor_indent_find(float angle) {
         if (angle > ccw_stop && angle < cw_stop) {
             if (search != prev_indent) {
                 prev_indent = search;
-                ESP_LOGI("motor_indent", "Found indent at %f", search->angle);
+                //ESP_LOGI("motor_indent", "Found indent at %f", search->angle);
             }
             return search;
         }

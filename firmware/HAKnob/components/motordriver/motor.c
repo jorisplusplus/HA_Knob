@@ -62,13 +62,13 @@
 #define BLDC_MCPWM_GEN_INDEX_HIGH 0
 #define BLDC_MCPWM_GEN_INDEX_LOW  1
 
-#define PI M_PI
-#define PI2    6.28318530718
-#define _3PI_2 4.71238898038
+#define PI     3.14159265359f
+#define PI2    6.28318530718f
+#define _3PI_2 4.71238898038f
 #define FACTOR 75
 #define SPEED 2857
 #define _SQRT3_2 0.86602540378f
-#define VSUPPLY 5.0
+#define VSUPPLY 5.0f
 
 static const char *TAG = "example";
 
@@ -151,12 +151,12 @@ static float IRAM_ATTR read_angle()
         spi_device_polling_transmit(spi_handle, &transaction);
         //ESP_LOGI(TAG, "%d %d %d", transaction.rx_data[0], transaction.rx_data[1], transaction.rx_data[2]);
         uint16_t val = (transaction.rx_data[0] << 6) | transaction.rx_data[1] >> 2;
-        float angle = ((float) val)/16384*PI2;
+        float angle = ((float) val)/16384.0f*PI2;
         //ESP_LOGI(TAG, "%d  ANGLE: %f", val, angle);
         return angle;       
 }
 
-#define AVG_NUM (8)
+#define AVG_NUM (20)
 static float IRAM_ATTR read_angle_avg() {
     static float angles[AVG_NUM];
     float sumX = 0.0f;
@@ -169,14 +169,14 @@ static float IRAM_ATTR read_angle_avg() {
     angles[AVG_NUM - 1] = read_angle();
 
     for (int i = 0; i < AVG_NUM; i++) {
-        sumX += cos(angles[i]);
-        sumY += sin(angles[i]);
+        sumX += cosf(angles[i]);
+        sumY += sinf(angles[i]);
     }
     float avgX = sumX/AVG_NUM;
     float avgY = sumY/AVG_NUM;
 
-    float average = atan2(avgY, avgX);
-    if (average < 0.0) {
+    float average = atan2f(avgY, avgX);
+    if (average < 0.0f) {
         average += PI2;
     }
 
@@ -209,12 +209,12 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
         mcpwm_comparator_set_compare_value(comparators[2], valC);
 }
 
-#define POS_P (10.0f)
+#define POS_P (20.0f)
 
-#define VEL_P (0.03f)
-#define VEL_I (0.00005f)
-#define VEL_D (0.000025f)
-#define VMAX (2*PI2)
+#define VEL_P (0.06f)
+#define VEL_I (0.06f)
+#define VEL_D (0.00f)
+#define VMAX (4*PI2)
 #define ULIMIT (2.0f)
 
 // PID controller function with integral limit
@@ -225,7 +225,7 @@ static float IRAM_ATTR pid_controller(float setpoint, float process_variable, fl
     static float integral = 0.0f;
     static float derivative = 0.0f;
     static float prev_error = 0.0f;
-    static float integral_limit = 2.0f;
+    static float integral_limit = 5.0f;
 
     // Calculate the error term
     error = setpoint - process_variable;
@@ -265,8 +265,8 @@ void IRAM_ATTR setPhaseVoltage(float Uq, float Ud, float angle_el) {
       // angle normalization in between 0 and 2pi
       // only necessary if using _sin and _cos - approximation functions
       angle_el = _normalizeAngle(angle_el);
-      float _ca = cos(angle_el);
-      float _sa = sin(angle_el);
+      float _ca = cosf(angle_el);
+      float _sa = sinf(angle_el);
       // Inverse park transform
       float Ualpha =  _ca * Ud - _sa * Uq;  // -sin(angle) * Uq;
       float Ubeta =  _sa * Ud + _ca * Uq;    //  cos(angle) * Uq;
@@ -297,14 +297,17 @@ void IRAM_ATTR vMotorProcessor(void *params) {
         int64_t current_time = esp_timer_get_time();
         float angle = read_angle_avg();
         int64_t readtime = esp_timer_get_time() - current_time;
-        int64_t dt = current_time - last_update;
-        float dangle = angle - last_angle;
-        if (dangle > PI) dangle -= PI2;
-        if (dangle < -PI) dangle += PI2;
-        float v = dangle/((float)dt/1000000);
-        vfilt = vfilt*0.95f + 0.05f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
+        
+        
         decimator++;
-        if (decimator == 50) {       
+        if (decimator == 10) {      
+            float dangle = angle - last_angle;
+            dangle = -dangle;
+            if (dangle > PI) dangle -= PI2;
+            if (dangle < -PI) dangle += PI2;
+            int64_t dt = current_time - last_update_PID;
+            float v = dangle/((float)dt/1000000);
+            vfilt = v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75 
             //Step 1: Compute target Velocity
             motor_indent_t *indent = motor_indent_find(angle * 360 / PI2);
 
@@ -322,20 +325,22 @@ void IRAM_ATTR vMotorProcessor(void *params) {
 
             //Step 2: Compute Voltage
             float timestep = ((float) current_time-last_update_PID)/1000000;
+            //vtarget = 6.0f;
             Uq = pid_controller(vtarget, vfilt, timestep);
             if (Uq < -ULIMIT) Uq = -ULIMIT;
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
-            ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
+            printf("%f \t%f \t%f \t%f \t%f \t%f \t%f \t%d \t%d\n", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
+            last_angle = angle;
+            //ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
 
         }
 
-        setPhaseVoltage(motor_enable ? Uq : 0.0f, 0.0, electrical_angle(angle));
+        setPhaseVoltage(motor_enable ? Uq : 0.0f, 0.0, electrical_angle(read_angle()));
         //setPhaseVoltage(0.5f, 0.0, electrical_angle(angle));
         //set_voltages(0, 0, 0);
         last_update = current_time;
-        last_angle = angle;
     }
 }
 
@@ -439,9 +444,15 @@ void motor_init(void)
     ESP_LOGI(TAG, "A");
     setPhaseVoltage(2.0, 0, _3PI_2);
     vTaskDelay(100);
-    offset = 0;
-    offset = electrical_angle(read_angle(NULL));
-    ESP_LOGI(TAG, "OFFSET: %f", offset);
+    
+    for (int i = 0; i < 30; i ++) {
+        float angle = read_angle_avg();
+        offset = 0.0f;
+        offset = electrical_angle(angle);
+        ESP_LOGI(TAG, "OFFSET: %f %f", offset, angle);
+        vTaskDelay(10);
+    }
+    
     set_voltages(0, 0, 0);
     vTaskDelay(100);
     mcpwm_timer_disable(timer);
