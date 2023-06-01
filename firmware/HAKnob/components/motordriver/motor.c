@@ -121,7 +121,7 @@ static esp_err_t spi_master_init(void) {
         .duty_cycle_pos = 128,         // 50% duty cycle
         .cs_ena_pretrans = 0,          // No CS toggling before transactions
         .cs_ena_posttrans = 0,         // No CS toggling after transactions
-        .clock_speed_hz = 15000000,     // Clock speed of 1MHz
+        .clock_speed_hz = 10000000,     // Clock speed of 1MHz
         .input_delay_ns = 0,           // No input delay
         .spics_io_num = GPIO_NUM_7,    // CS pin
         .flags = 0,                    // No flags
@@ -284,7 +284,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
         while(process_en == 0) {}
         process_en = 0;
         int64_t current_time = esp_timer_get_time();
-        float angle = read_angle();
+        float angle = read_angle_avg();
         int64_t readtime = esp_timer_get_time() - current_time;
         int64_t dt = current_time - last_update;
         float dangle = angle - last_angle;
@@ -440,8 +440,8 @@ void motor_init(void)
     callbacks.on_full = NULL;
     callbacks.on_empty = md_update;
     callbacks.on_stop = NULL;
-    for (int i = 10; i < 360; i+= 20) {
-        motor_indent_register(i, 10, 10, 1);
+    for (int i = 45; i < 360; i+= 90) {
+        motor_indent_register(i, 45, 45, 1);
     }
     xTaskCreatePinnedToCore(vMotorProcessor, "FOC", 16000, NULL, 100, &s_processor_handle, 1);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
