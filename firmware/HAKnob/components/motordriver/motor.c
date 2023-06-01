@@ -119,20 +119,62 @@ static esp_err_t i2c_master_init(void)
     return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
-static float IRAM_ATTR read_angle()
-{
-        uint8_t txdata;
-        uint8_t data[2];
-        txdata = 0x03;
-        esp_err_t res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, data, 1, 10);
-        txdata = 0x04;
-        res = i2c_master_write_read_device(I2C_MASTER_NUM, MM_ADDRESS, &txdata, 1, &data[1], 1, 10);
-        uint16_t val = (data[0] << 6) | data[1] >> 2;
-        float angle = ((float) val)/16384*PI2;
-        //ESP_LOGI(TAG, "%d %d  ANGLE: %f", res, val, angle);
-        return angle;       
+static uint8_t i2c_response[2];
+static i2c_cmd_handle_t i2c_handle[2];
+
+static void generate_i2c_command() {
+    esp_err_t err = ESP_OK;
+    i2c_handle[0] = i2c_cmd_link_create();
+    assert (i2c_handle[0] != NULL);
+    i2c_master_start(i2c_handle[0]);
+    i2c_master_write_byte(i2c_handle[0], MM_ADDRESS << 1 | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(i2c_handle[0], 0x03, true);
+    i2c_master_start(i2c_handle[0]);
+    i2c_master_write_byte(i2c_handle[0], MM_ADDRESS << 1 | I2C_MASTER_READ, true);
+    i2c_master_read_byte(i2c_handle[0], i2c_response, I2C_MASTER_NACK);
+    i2c_master_stop(i2c_handle[0]);
+    //read second byte
+    i2c_handle[1] = i2c_cmd_link_create();
+    assert (i2c_handle[1] != NULL);
+    i2c_master_start(i2c_handle[1]);
+    i2c_master_write_byte(i2c_handle[1], MM_ADDRESS << 1 | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(i2c_handle[1], 0x04, true);
+    i2c_master_start(i2c_handle[1]);
+    i2c_master_write_byte(i2c_handle[1], MM_ADDRESS << 1 | I2C_MASTER_READ, true);
+    i2c_master_read_byte(i2c_handle[1], &i2c_response[1], I2C_MASTER_NACK);
+    i2c_master_stop(i2c_handle[1]);
 }
 
+static float IRAM_ATTR read_angle() {
+    esp_err_t res = i2c_master_cmd_begin(I2C_MASTER_NUM, i2c_handle[0], 100);
+    res |= i2c_master_cmd_begin(I2C_MASTER_NUM, i2c_handle[1], 100);
+    if (res == ESP_OK)
+    {
+        uint16_t val = (i2c_response[0] << 6) | i2c_response[1] >> 2;
+        float angle = ((float) val)*PI2/16384;
+        //ESP_LOGI(TAG, "%d ANGLE: %f", val, angle);
+        return angle;
+    }
+    ESP_LOGI(TAG, "%s", esp_err_to_name(res));
+    return -1.0f;
+}
+
+
+#define AVG_NUM (8)
+static float IRAM_ATTR read_angle_avg() {
+    static float angles[AVG_NUM];
+    for (int i = 0; i < (AVG_NUM - 1); i++)
+    {
+        angles[i] = angles[i + 1];
+    }
+    angles[AVG_NUM - 1] = read_angle();
+
+    float total = 0.0f;
+    for (int i = 0; i < AVG_NUM; i++) {
+        total += angles[i];
+    }
+    return total / AVG_NUM;
+}
 
 /**
  * @brief Determines the electrical angle of the motor assumes CCW and 7 pole pairs
@@ -162,9 +204,9 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
 
 #define POS_P (10.0f)
 
-#define VEL_P (0.25f)
-#define VEL_I (0.005f)
-#define VEL_D (0.0025f)
+#define VEL_P (0.07f)
+#define VEL_I (0.0005f)
+#define VEL_D (0.00025f)
 #define VMAX (2*PI2)
 #define ULIMIT (2.0f)
 
@@ -235,9 +277,9 @@ void IRAM_ATTR setPhaseVoltage(float Uq, float Ud, float angle_el) {
 void IRAM_ATTR vMotorProcessor(void *params) {
     float Uq = 1.5f;
     float voltage_power_supply = 5.0;
+    float last_angle = read_angle();
     int64_t last_update = esp_timer_get_time();
     int64_t last_update_PID = esp_timer_get_time();
-    float last_angle = read_angle();
     float vfilt = 0;
     int decimator = 0;
     int motor_enable = 0;
@@ -248,18 +290,14 @@ void IRAM_ATTR vMotorProcessor(void *params) {
         int64_t current_time = esp_timer_get_time();
         float angle = read_angle();
         int64_t readtime = esp_timer_get_time() - current_time;
-        
         int64_t dt = current_time - last_update;
+        float dangle = angle - last_angle;
+        if (dangle > PI) dangle -= PI2;
+        if (dangle < -PI) dangle += PI2;
+        float v = dangle/((float)dt/1000000);
+        vfilt = vfilt*0.9f + 0.1f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
         decimator++;
-        if (decimator == 5) {
-            float dangle = angle - last_angle;
-            if (dangle > PI) dangle -= PI2;
-            if (dangle < -PI) dangle += PI2;
-            float v = dangle/((float)dt/1000000);
-            vfilt = vfilt*0.98f + 0.02f*v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75
-
-
-       
+        if (decimator == 5) {       
             //Step 1: Compute target Velocity
             motor_indent_t *indent = motor_indent_find(angle * 360 / PI2);
 
@@ -282,11 +320,12 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
-            //ESP_LOGI(TAG, "A:%f %f %f, U: %f, Vt: %f, Vf: %f, v: %f %d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
+            ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
 
         }
 
         setPhaseVoltage(motor_enable ? Uq : 0.0f, 0.0, electrical_angle(angle));
+        //setPhaseVoltage(0.5f, 0.0, electrical_angle(angle));
         //set_voltages(0, 0, 0);
         last_update = current_time;
         last_angle = angle;
@@ -296,6 +335,9 @@ void IRAM_ATTR vMotorProcessor(void *params) {
 void motor_init(void)
 {
     i2c_master_init();
+    vTaskDelay(100);
+    generate_i2c_command();
+
     ESP_LOGI(TAG, "Create MCPWM timer");
     
     mcpwm_timer_config_t timer_config = {
