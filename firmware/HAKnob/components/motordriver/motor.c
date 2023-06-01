@@ -8,7 +8,7 @@
 #include "driver/mcpwm_gen.h"
 #include "driver/gpio.h"
 #include "math.h"
-#include "driver/i2c.h"
+#include "driver/spi_master.h"
 #include "motorindent.h"
 
 #define GPIO_LCD_RESET  GPIO_NUM_1
@@ -98,67 +98,63 @@ IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_ev
 
 //MAIN foc loop
 
-/**
- * @brief i2c master initialization
- */
-static esp_err_t i2c_master_init(void)
-{
-    int i2c_master_port = I2C_MASTER_NUM;
+static spi_device_handle_t spi_handle;
 
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = I2C_MASTER_SDA_IO,
-        .scl_io_num = I2C_MASTER_SCL_IO,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+static esp_err_t spi_master_init(void) {
+    
+    spi_bus_config_t bus_config = {
+        .mosi_io_num = -1,    // MOSI pin
+        .miso_io_num = GPIO_MM_SDA,    // MISO pin
+        .sclk_io_num = GPIO_MM_SCL,    // CLK pin
+        .quadwp_io_num = -1,           // Not used
+        .quadhd_io_num = -1,           // Not used
+        .max_transfer_sz = 4,          // Use default maximum transfer size
     };
 
-    i2c_param_config(i2c_master_port, &conf);
+    spi_bus_initialize(SPI3_HOST, &bus_config, SPI_DMA_DISABLED);
 
-    return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
+    spi_device_interface_config_t dev_config = {
+        .command_bits = 0,             // No command bits
+        .address_bits = 0,             // No address bits
+        .dummy_bits = 0,               // No dummy bits
+        .mode = 3,                     // SPI mode 0
+        .duty_cycle_pos = 128,         // 50% duty cycle
+        .cs_ena_pretrans = 0,          // No CS toggling before transactions
+        .cs_ena_posttrans = 0,         // No CS toggling after transactions
+        .clock_speed_hz = 15000000,     // Clock speed of 1MHz
+        .input_delay_ns = 0,           // No input delay
+        .spics_io_num = GPIO_NUM_7,    // CS pin
+        .flags = 0,                    // No flags
+        .queue_size = 1,               // Use 1 transaction at a time
+        .pre_cb = NULL,                // No pre-transfer callback
+        .post_cb = NULL,               // No post-transfer callback
+    };
+
+    spi_bus_add_device(SPI3_HOST, &dev_config, &spi_handle);
+
+    spi_transaction_t transaction = {0};
+    transaction.flags = SPI_TRANS_USE_RXDATA | SPI_TRANS_USE_TXDATA;
+    transaction.length = 3 * 8;
+
+    spi_device_transmit(spi_handle, &transaction);
+    ESP_LOGI(TAG, "%d %d %d", transaction.rx_data[0], transaction.rx_data[1], transaction.rx_data[2]);
+    return ESP_OK;
+
 }
 
-static uint8_t i2c_response[2];
-static i2c_cmd_handle_t i2c_handle[2];
+static float IRAM_ATTR read_angle()
+{
+        spi_transaction_t transaction = {0};
+        transaction.flags = SPI_TRANS_USE_RXDATA | SPI_TRANS_USE_TXDATA;
+        transaction.length = 3 * 8;
 
-static void generate_i2c_command() {
-    esp_err_t err = ESP_OK;
-    i2c_handle[0] = i2c_cmd_link_create();
-    assert (i2c_handle[0] != NULL);
-    i2c_master_start(i2c_handle[0]);
-    i2c_master_write_byte(i2c_handle[0], MM_ADDRESS << 1 | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_handle[0], 0x03, true);
-    i2c_master_start(i2c_handle[0]);
-    i2c_master_write_byte(i2c_handle[0], MM_ADDRESS << 1 | I2C_MASTER_READ, true);
-    i2c_master_read_byte(i2c_handle[0], i2c_response, I2C_MASTER_NACK);
-    i2c_master_stop(i2c_handle[0]);
-    //read second byte
-    i2c_handle[1] = i2c_cmd_link_create();
-    assert (i2c_handle[1] != NULL);
-    i2c_master_start(i2c_handle[1]);
-    i2c_master_write_byte(i2c_handle[1], MM_ADDRESS << 1 | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_handle[1], 0x04, true);
-    i2c_master_start(i2c_handle[1]);
-    i2c_master_write_byte(i2c_handle[1], MM_ADDRESS << 1 | I2C_MASTER_READ, true);
-    i2c_master_read_byte(i2c_handle[1], &i2c_response[1], I2C_MASTER_NACK);
-    i2c_master_stop(i2c_handle[1]);
+        spi_device_polling_transmit(spi_handle, &transaction);
+        //ESP_LOGI(TAG, "%d %d %d", transaction.rx_data[0], transaction.rx_data[1], transaction.rx_data[2]);
+        uint16_t val = (transaction.rx_data[0] << 6) | transaction.rx_data[1] >> 2;
+        float angle = ((float) val)/16384*PI2;
+        //ESP_LOGI(TAG, "%d  ANGLE: %f", val, angle);
+        return angle;       
 }
-
-static float IRAM_ATTR read_angle() {
-    esp_err_t res = i2c_master_cmd_begin(I2C_MASTER_NUM, i2c_handle[0], 100);
-    res |= i2c_master_cmd_begin(I2C_MASTER_NUM, i2c_handle[1], 100);
-    if (res == ESP_OK)
-    {
-        uint16_t val = (i2c_response[0] << 6) | i2c_response[1] >> 2;
-        float angle = ((float) val)*PI2/16384;
-        //ESP_LOGI(TAG, "%d ANGLE: %f", val, angle);
-        return angle;
-    }
-    ESP_LOGI(TAG, "%s", esp_err_to_name(res));
-    return -1.0f;
-}
-
 
 #define AVG_NUM (8)
 static float IRAM_ATTR read_angle_avg() {
@@ -218,7 +214,7 @@ static float IRAM_ATTR pid_controller(float setpoint, float process_variable, fl
     static float integral = 0.0f;
     static float derivative = 0.0f;
     static float prev_error = 0.0f;
-    static float integral_limit = 10.0f;
+    static float integral_limit = 2.0f;
 
     // Calculate the error term
     error = setpoint - process_variable;
@@ -320,7 +316,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
-            ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt);
+            ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
 
         }
 
@@ -334,10 +330,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
 
 void motor_init(void)
 {
-    i2c_master_init();
-    vTaskDelay(100);
-    generate_i2c_command();
-
+    spi_master_init();
     ESP_LOGI(TAG, "Create MCPWM timer");
     
     mcpwm_timer_config_t timer_config = {
