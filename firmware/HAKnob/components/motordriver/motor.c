@@ -209,7 +209,7 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
         mcpwm_comparator_set_compare_value(comparators[2], valC);
 }
 
-#define POS_P (20.0f)
+#define POS_P (50.0f)
 
 #define VEL_P (0.065f)
 #define VEL_I (0.04f)
@@ -315,7 +315,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
 
             if (indent != NULL) {
                 float error_angle = indent->angle*PI2/360 - angle;
-                vtarget = -error_angle*POS_P;
+                vtarget = -error_angle*POS_P*indent->force;
                 vtarget = fmin(vtarget, VMAX);
                 motor_enable = 1;
             } else {
@@ -463,7 +463,7 @@ void motor_init(void)
     callbacks.on_empty = md_update;
     callbacks.on_stop = NULL;
     for (int i = 15; i < 360; i+= 30) {
-        motor_indent_register(i, 15, 15, 1);
+        motor_indent_register(i, 15, 15, 0.8f);
     }
     xTaskCreatePinnedToCore(vMotorProcessor, "FOC", 16000, NULL, 100, &s_processor_handle, 1);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
