@@ -90,8 +90,10 @@ IRAM_ATTR static bool md_update(mcpwm_timer_handle_t timer, const mcpwm_timer_ev
     static int decimator = 0;
     decimator++;
     if (decimator == 4) {
-        process_en = 1;
         decimator = 0;
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xTaskNotifyFromISR(s_processor_handle, 0, 0, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
     return true;
 }
@@ -157,7 +159,7 @@ static float IRAM_ATTR read_angle()
 }
 
 #define AVG_NUM (20)
-static float IRAM_ATTR read_angle_avg() {
+static void IRAM_ATTR read_angle_avg(float *angle, float *avg_angle) {
     static float angles[AVG_NUM];
     float sumX = 0.0f;
     float sumY = 0.0f;
@@ -166,7 +168,8 @@ static float IRAM_ATTR read_angle_avg() {
     {
         angles[i] = angles[i + 1];
     }
-    angles[AVG_NUM - 1] = read_angle();
+    *angle = read_angle();
+    angles[AVG_NUM - 1] = *angle;
 
     for (int i = 0; i < AVG_NUM; i++) {
         sumX += cosf(angles[i]);
@@ -175,12 +178,10 @@ static float IRAM_ATTR read_angle_avg() {
     float avgX = sumX/AVG_NUM;
     float avgY = sumY/AVG_NUM;
 
-    float average = atan2f(avgY, avgX);
-    if (average < 0.0f) {
-        average += PI2;
+    *avg_angle = atan2f(avgY, avgX);
+    if (*avg_angle < 0.0f) {
+        *avg_angle += PI2;
     }
-
-    return average;
 }
 
 /**
@@ -213,7 +214,7 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
 
 #define VEL_P (0.065f)
 #define VEL_I (0.04f)
-#define VEL_D (0.00007f)
+#define VEL_D (0.00003f)
 #define VMAX (4*PI2)
 #define ULIMIT (2.0f)
 
@@ -282,32 +283,30 @@ void IRAM_ATTR setPhaseVoltage(float Uq, float Ud, float angle_el) {
 }
 
 void IRAM_ATTR vMotorProcessor(void *params) {
-    float Uq = 1.5f;
-    float voltage_power_supply = 5.0;
+    static float Uq = 0.0f;
     float last_angle = read_angle();
     int64_t last_update = esp_timer_get_time();
     int64_t last_update_PID = esp_timer_get_time();
-    float vfilt = 0;
     int decimator = 0;
     int motor_enable = 0;
     ESP_LOGI(TAG, "Motor controller started");
     for (;;) {
-        while(process_en == 0) {}
-        process_en = 0;
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         int64_t current_time = esp_timer_get_time();
-        float angle = read_angle_avg();
+        float angle_avg, angle;
+        read_angle_avg(&angle, &angle_avg);
         int64_t readtime = esp_timer_get_time() - current_time;
         
         
         decimator++;
         if (decimator == 10) {      
-            float dangle = angle - last_angle;
+            float dangle = angle_avg - last_angle;
             dangle = -dangle;
             if (dangle > PI) dangle -= PI2;
             if (dangle < -PI) dangle += PI2;
             int64_t dt = current_time - last_update_PID;
             float v = dangle/((float)dt/1000000);
-            vfilt = v;    //Single Pole FIR low pass filter see https://fiiir.com/ decay = 0.75 
+            
             //Step 1: Compute target Velocity
             motor_indent_t *indent = motor_indent_find(angle * 360 / PI2);
 
@@ -325,21 +324,19 @@ void IRAM_ATTR vMotorProcessor(void *params) {
 
             //Step 2: Compute Voltage
             float timestep = ((float) current_time-last_update_PID)/1000000;
-            //vtarget = 6.0f;
-            Uq = pid_controller(vtarget, vfilt, timestep);
+            
+            Uq = pid_controller(vtarget, v, timestep);
             if (Uq < -ULIMIT) Uq = -ULIMIT;
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
             //printf("%f \t%f \t%f \t%f \t%f \t%f \t%f \t%d \t%d\n", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
-            last_angle = angle;
+            last_angle = angle_avg;
             //ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
-
+            int64_t pidtime = esp_timer_get_time() - current_time;
         }
 
-        setPhaseVoltage(motor_enable ? Uq : 0.0f, 0.0, electrical_angle(read_angle()));
-        //setPhaseVoltage(0.5f, 0.0, electrical_angle(angle));
-        //set_voltages(0, 0, 0);
+        setPhaseVoltage(motor_enable ? Uq : 0.0f, 0.0, electrical_angle(angle));
         last_update = current_time;
     }
 }
@@ -446,10 +443,11 @@ void motor_init(void)
     vTaskDelay(100);
     
     for (int i = 0; i < 30; i ++) {
-        float angle = read_angle_avg();
+        float angle, angle_avg;
+        read_angle_avg(&angle, &angle_avg);
         offset = 0.0f;
-        offset = electrical_angle(angle);
-        ESP_LOGI(TAG, "OFFSET: %f %f", offset, angle);
+        offset = electrical_angle(angle_avg);
+        ESP_LOGI(TAG, "OFFSET: %f %f", offset, angle_avg);
         vTaskDelay(10);
     }
     
