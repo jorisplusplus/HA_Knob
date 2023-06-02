@@ -211,9 +211,9 @@ static void IRAM_ATTR set_voltages(float Ua, float Ub, float Uc) {
 
 #define POS_P (20.0f)
 
-#define VEL_P (0.06f)
-#define VEL_I (0.06f)
-#define VEL_D (0.00f)
+#define VEL_P (0.065f)
+#define VEL_I (0.04f)
+#define VEL_D (0.00007f)
 #define VMAX (4*PI2)
 #define ULIMIT (2.0f)
 
@@ -331,7 +331,7 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             if (Uq > ULIMIT) Uq = ULIMIT;
             last_update_PID = current_time;
             decimator = 0;
-            printf("%f \t%f \t%f \t%f \t%f \t%f \t%f \t%d \t%d\n", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
+            //printf("%f \t%f \t%f \t%f \t%f \t%f \t%f \t%d \t%d\n", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
             last_angle = angle;
             //ESP_LOGI(TAG, "A:\t%f \t%f \t%f, U: \t%f, Vt: \t%f, Vf: \t%f, v: \t%f \t%d \t%d", angle, last_angle, dangle, Uq, vtarget, vfilt, v, (int) dt, (int) readtime);
 
@@ -462,8 +462,8 @@ void motor_init(void)
     callbacks.on_full = NULL;
     callbacks.on_empty = md_update;
     callbacks.on_stop = NULL;
-    for (int i = 45; i < 360; i+= 90) {
-        motor_indent_register(i, 45, 45, 1);
+    for (int i = 15; i < 360; i+= 30) {
+        motor_indent_register(i, 15, 15, 1);
     }
     xTaskCreatePinnedToCore(vMotorProcessor, "FOC", 16000, NULL, 100, &s_processor_handle, 1);
     mcpwm_timer_register_event_callbacks(timer, &callbacks, s_processor_handle);
