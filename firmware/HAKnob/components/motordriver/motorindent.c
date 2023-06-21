@@ -44,6 +44,7 @@ void motor_indent_register(float angle, float cw, float ccw, float power) {
  * 
  */
 void motor_indent_destroy() {
+    if (HEAD == NULL) return;
     motor_indent_t *next = HEAD;
     while(next != NULL) {
         motor_indent_t *save;
@@ -51,6 +52,7 @@ void motor_indent_destroy() {
         next = next->next;
         free(save);
     }
+    HEAD = NULL;
 }
 
 /**

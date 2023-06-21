@@ -313,7 +313,9 @@ void IRAM_ATTR vMotorProcessor(void *params) {
             float vtarget;
 
             if (indent != NULL) {
-                float error_angle = indent->angle*PI2/360 - angle;
+                float error_angle_a = indent->angle*PI2/360.0f - angle;
+                float error_angle_b = angle - indent->angle*PI2/360.0f;
+                float error_angle = fabs(error_angle_a) < fabs(error_angle_b) ? error_angle_a : error_angle_b;
                 vtarget = -error_angle*POS_P*indent->force;
                 vtarget = fmin(vtarget, VMAX);
                 motor_enable = 1;
